@@ -22,7 +22,7 @@ def masking(a,probs,curr,mod_size, prev_action):
 def choose_action(network,a, mod_size, curr, prev_action, goal, steps_done):
     # get Q values for arrangement
     values = network.forward(a, goal).detach().numpy()
-
+    #print('OG q values: ', values)
     # boltzmann exploration
     probs = [0] * mod_size
     sum = 0
@@ -37,7 +37,7 @@ def choose_action(network,a, mod_size, curr, prev_action, goal, steps_done):
 
     # perform action masking
     probs = masking(a,probs, curr,mod_size, prev_action)
-
+    #print('masked probs: ', probs)
     # pick action
     act = np.random.choice(range(mod_size), p=probs)
     return act
@@ -50,6 +50,7 @@ def reward(a, curr, mod_size, goal, action, modules):
     rew = 0
     dist = 0
     a = a.numpy()
+    pos = (0.0, 0.0, 0.0)
     #print('arrangement: ', a)
     #print('curr: ', curr)
     for i in range(0, curr + mod_size, mod_size):
@@ -62,10 +63,11 @@ def reward(a, curr, mod_size, goal, action, modules):
             rew -= act_weight
             #print('subtracting for actuators, reward is: ', rew)
     if action == mod_size - 1: # if terminal module, obtain terminal reward
-        dist, term_r = term_reward(a, mod_size, goal, curr, modules)
+        dist, term_r, endEffPos = term_reward(a, mod_size, goal, curr, modules)
         rew += term_r
+        pos = endEffPos
         #print('adding distance, reward is: ', rew)
-    return rew, dist
+    return rew, dist, pos
 
 def term_reward(a, mod_size, goal, curr, modules):
     arrangement = [''] * int((curr / mod_size) + 1)
@@ -84,12 +86,13 @@ def term_reward(a, mod_size, goal, curr, modules):
     #print('terminal arrangement: ', arrangement)
 
     if arrangement[-1] != modules[-1][0:2]: # if last module is not end-effector
-        return 0, -1 # just returning dist from goal as 0 and reward as -1
+        return 0, -1, (0.0, 0.0, 0.0) # just returning dist from goal as 0 and reward as -1
     else:
         make_xml(arrangement, info) # generate the xacro for the arm
         cmd = 'rosrun xacro xacro custom.xacro > custom.urdf'
         os.system(cmd)
-        dist = sim(goal) # do pybullet simulation for IK
-
-        #print('dist: ', dist)
-        return dist, math.exp(-dist) # return distance from goal and softened reward from 0 - 1
+        dist, endEffPos = sim(goal) # do pybullet simulation for IK
+        if dist < .2:        #print('dist: ', dist)
+            return dist, math.exp(-dist), endEffPos # return distance from goal and softened reward from 0 - 1
+        else:
+            return dist, 0, endEffPos

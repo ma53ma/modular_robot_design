@@ -30,4 +30,4 @@ def sim(goal):
     # delete arm from simulation
     p.disconnect()
     #print('dist: ', dist)
-    return dist
+    return dist, endEffPos
