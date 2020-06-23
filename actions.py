@@ -4,10 +4,8 @@ import os
 from pybullet_sim import sim
 import math
 
-def masking(a,probs,curr,mod_size, prev_action):
-    if curr == len(a) - mod_size: # if this is the last module, mask the actuator
-        mask_range = [0, 1]
-    elif prev_action > 0: # if the previous module was not an actuator, mask all but the actuator
+def masking(probs,mod_size, prev_action):
+    if prev_action > 0: # if the previous module was not an actuator, mask all but the actuator
         mask_range = [1,mod_size]
     else: # if the previous module was an actuator, mask actuator
         mask_range = [0,1]
@@ -19,10 +17,10 @@ def masking(a,probs,curr,mod_size, prev_action):
 
     return probs
 
-def choose_action(network,a, mod_size, curr, prev_action, goal, steps_done):
+def choose_action(network,a, mod_size, prev_action, goal, steps_done):
     # get Q values for arrangement
     values = network.forward(a, goal).detach().numpy()
-    #print('OG q values: ', values)
+
     # boltzmann exploration
     probs = [0] * mod_size
     sum = 0
@@ -36,8 +34,8 @@ def choose_action(network,a, mod_size, curr, prev_action, goal, steps_done):
         probs[i] = np.exp(values[i] / t) / sum
 
     # perform action masking
-    probs = masking(a,probs, curr,mod_size, prev_action)
-    #print('masked probs: ', probs)
+    probs = masking(probs, mod_size, prev_action)
+
     # pick action
     act = np.random.choice(range(mod_size), p=probs)
     return act
@@ -51,22 +49,16 @@ def reward(a, curr, mod_size, goal, action, modules):
     dist = 0
     a = a.numpy()
     pos = (0.0, 0.0, 0.0)
-    #print('arrangement: ', a)
-    #print('curr: ', curr)
     for i in range(0, curr + mod_size, mod_size):
         #if a[i] == 1: # accounting for mass of each element
         #    cost -= mass_weight*masses[i % len(masses)]
-        #print('i: ', i)
         mod = a[i:i + mod_size]
-        #print('mod: ', mod)
         if mod[0] == 1: # accounting for number of actuators
             rew -= act_weight
-            #print('subtracting for actuators, reward is: ', rew)
-    if action == mod_size - 1: # if terminal module, obtain terminal reward
-        dist, term_r, endEffPos = term_reward(a, mod_size, goal, curr, modules)
+    if action == mod_size - 1 or curr == len(a) - mod_size: # if putting end effector on or at last module, obtain terminal reward
+        dist, term_r, end_eff_pos = term_reward(a, mod_size, goal, curr, modules)
         rew += term_r
-        pos = endEffPos
-        #print('adding distance, reward is: ', rew)
+        pos = end_eff_pos
     return rew, dist, pos
 
 def term_reward(a, mod_size, goal, curr, modules):
@@ -83,16 +75,11 @@ def term_reward(a, mod_size, goal, curr, modules):
                 else: # if module is link get first four items
                     arrangement[i] = modules[j][0:4]
                 break
-    #print('terminal arrangement: ', arrangement)
-
     if arrangement[-1] != modules[-1][0:2]: # if last module is not end-effector
         return 0, -1, (0.0, 0.0, 0.0) # just returning dist from goal as 0 and reward as -1
     else:
         make_xml(arrangement, info) # generate the xacro for the arm
         cmd = 'rosrun xacro xacro custom.xacro > custom.urdf'
-        os.system(cmd)
-        dist, endEffPos = sim(goal) # do pybullet simulation for IK
-        if dist < .2:        #print('dist: ', dist)
-            return dist, math.exp(-dist), endEffPos # return distance from goal and softened reward from 0 - 1
-        else:
-            return dist, 0, endEffPos
+        os.system(cmd) # convert xacro to urdf
+        dist, end_eff_pos = sim(goal) # do pybullet simulation for IK
+        return dist, math.exp(-10*dist), end_eff_pos

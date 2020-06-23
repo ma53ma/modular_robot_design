@@ -7,7 +7,6 @@ import time
 def sim(goal):
     physicsClient = p.connect(p.DIRECT)  # or p.DIRECT for non-graphical version, p.DIRECT is faster
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
-    #planeId = p.loadURDF("plane.urdf")
     cubeStartPos = [0,0,0]
     cubeStartOrientation = p.getQuaternionFromEuler([0,0,0])
     robotId = p.loadURDF("custom.urdf",cubeStartPos, cubeStartOrientation)
@@ -17,7 +16,7 @@ def sim(goal):
     # inverse kinematics
     angles = p.calculateInverseKinematics(robotId, finalJoint - 1, goal)
 
-    p.setRealTimeSimulation(1) # don't need if doing p.DIRECT for server, but do need for p.GUI
+    #p.setRealTimeSimulation(1) # don't need if doing p.DIRECT for server, but do need for p.GUI
 
     # forward kinematics
     for i in range(len(angles)):

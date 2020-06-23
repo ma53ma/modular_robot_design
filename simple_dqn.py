@@ -69,7 +69,7 @@ class env():
         a = np.array([0, 0, 0, 0, 0, 0] * self.arm_size)
         self.a = torch.from_numpy(a).type(torch.FloatTensor)
         self.prev_action = 1
-        goal = np.array([random.uniform(.25, .5), random.uniform(.25, .5),
+        goal = np.array([random.uniform(-.4, .4), random.uniform(-.4, .4),
                          random.uniform(0.0, .25)])
         self.goal = torch.from_numpy(goal).type(torch.FloatTensor)  # randomizing location of goal
         self.buffer_record = []
@@ -80,7 +80,10 @@ class env():
         global steps_done
         done = 0
         # determining action
-        action = choose_action(model, a, mod_size, curr, self.prev_action, goal, steps_done)
+        #print('')
+        #print('state: ', a)
+        action = choose_action(model, a, mod_size, self.prev_action, goal, steps_done)
+        #print('action: ', action)
         steps_done += 1
         if action == mod_size - 1:
             done = 1
@@ -104,7 +107,8 @@ class env():
         pos = torch.from_numpy(np.array(pos)).type(torch.FloatTensor)
         # Bellman's equation for updating Q values
         target = r + model.gamma * torch.max(next_state_vals)
-
+        #print('reward: ', r)
+        #print('')
         # Computing loss
         loss = model.loss_fn(state_vals[action], target)
         self.a = copy.deepcopy(next_a)
@@ -125,11 +129,12 @@ class env():
         # optimizer step
         model.optimizer.step()
 
+        #print('updated vals: ', model.forward(a, goal))
         return loss.item(), dist, done
 
     def test_step(self, target_net, curr):
         values = target_net.forward(self.a, self.goal).detach().numpy()
-        qvals = masking(self.a, values, curr, self.mod_size, self.prev_action)
+        qvals = masking(values, self.mod_size, self.prev_action)
         action = np.argmax(qvals)
         self.prev_action = action
         self.a[curr: curr + self.mod_size] = self.actions[action]
@@ -163,6 +168,12 @@ def validation(env):
                 print('arrangement: ', test_a)
                 print('distance: ', final_dist[0])
                 print('')
+                if goal == val_goals[0]:
+                    writer.add_scalar('Validation Distance/(.1,.1,.1)', final_dist[0], ep)
+                elif goal == val_goals[1]:
+                    writer.add_scalar('Validation Distance/(.3,.3,.3)', final_dist[0], ep)
+                else:
+                    writer.add_scalar('Validation Distance/(.5,.5,.5)', final_dist[0], ep)
                 break
         env.reset()
 
@@ -187,18 +198,18 @@ if __name__ == '__main__':
     buffer_count = 0
     for ep in range(train_episodes):
         print('ep: ', ep)
-        if buffer_count == 100:
+        '''        if buffer_count == 100:
             print('in buffer')
             for i in range(buffer_count):
                 buffer_episode = buffer[i]
                 for tup in buffer_episode[0]:
                     env.buffer_step(target_net, tup[0],tup[1],tup[2],tup[3],buffer_episode[1])
             buffer = {}
-            buffer_count = 0
+            buffer_count = 0'''
         if (ep + 100) % 100 == 0:
             validation(env)
         else:
-            print('goal: ', env.goal)
+            #print('goal: ', env.goal)
             for curr in range(0, len(env.a), env.mod_size):
                 l,dist, done = env.step(target_net, env.a,curr, env.mod_size, env.goal)
                 total_loss += l
@@ -208,7 +219,7 @@ if __name__ == '__main__':
                     print('distance: ', dist)
                     buffer[buffer_count] = (env.buffer_record, env.buffer_goal)
                     buffer_count += 1
-                    print('buffer count: ', buffer_count)
+                    #print('buffer count: ', buffer_count)
                     writer.add_scalar('Distance/train', dist, ep)
                     break
         env.reset()
