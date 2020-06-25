@@ -32,8 +32,8 @@ class DQN(nn.Module):
         super(DQN, self).__init__()
         self.goal_layer = nn.Linear(target_size, 64)
         self.a_layer = nn.Linear(state_size, 64)
-        self.model = nn.Sequential(nn.ReLU(), nn.Linear(128, 64),
-                                    nn.ReLU(), nn.Linear(64, action_size))
+        self.model = nn.Sequential(nn.ReLU(), nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, 64), nn.ReLU(), nn.Linear(64, 32),
+                                    nn.ReLU(), nn.Linear(32, action_size))
         self.optimizer = optim.Adam(self.parameters(),lr)
         self.loss_fn = nn.MSELoss()
         self.lr = lr
@@ -64,6 +64,7 @@ class env():
         self.mod_size = len(self.actions)
         self.buffer_record = []
         self.buffer_goal = 0
+        self.epsilon = .1
 
     def reset(self):
         a = np.array([0, 0, 0, 0, 0, 0] * self.arm_size)
@@ -76,23 +77,23 @@ class env():
         self.buffer_goal = 0
 
 
-    def step(self, model, a, curr, mod_size, goal):
+    def step(self, model, a, curr, goal):
         global steps_done
         done = 0
         # determining action
         #print('')
         #print('state: ', a)
-        action = choose_action(model, a, mod_size, self.prev_action, goal, steps_done)
+        action = choose_action(model, a, self.mod_size, self.prev_action, goal, steps_done)
         #print('action: ', action)
         steps_done += 1
-        if action == mod_size - 1:
+        if action == self.mod_size - 1:
             done = 1
         # storing previous action
         self.prev_action = action
 
         # updating the current module with the chosen action
         next_a = copy.deepcopy(a)
-        next_a[curr: curr + mod_size] = self.actions[action]
+        next_a[curr: curr + self.mod_size] = self.actions[action]
         #print('a: ', a)
         #print('next a: ', next_a)
         # forward pass through DQN for old arrangement
@@ -102,7 +103,7 @@ class env():
         next_state_vals = model.forward(next_a, goal)
 
         # obtaining reward for new arrangement and distance from goal if terminal arrangement
-        cost, dist, pos  = reward(next_a, curr, mod_size, goal, action, modules)
+        cost, dist, pos  = reward(next_a, curr, self.mod_size, goal, action, modules)
         r = cost
         pos = torch.from_numpy(np.array(pos)).type(torch.FloatTensor)
         # Bellman's equation for updating Q values
@@ -113,12 +114,6 @@ class env():
         loss = model.loss_fn(state_vals[action], target)
         self.a = copy.deepcopy(next_a)
         # keeping track of episode for replay buffer
-        self.buffer_record.append((a, next_a, action, r))
-        if done:
-            if dist < .2:
-                self.buffer_goal = self.goal
-            else:
-                self.buffer_goal = pos
 
         # clear old gradients
         model.optimizer.zero_grad()
@@ -139,15 +134,6 @@ class env():
         self.prev_action = action
         self.a[curr: curr + self.mod_size] = self.actions[action]
         return action
-
-    def buffer_step(self, model, a, next_a, action, r, goal):
-        state_vals = model.forward(a, goal)
-        next_state_vals = model.forward(next_a, goal)
-        target = r + model.gamma * torch.max(next_state_vals)
-        loss = model.loss_fn(state_vals[action], target)
-        model.optimizer.zero_grad()
-        loss.backward()
-        model.optimizer.step()
 
 def print_formatting(test_a, mod_size):
     moduled_output = np.zeros(shape=(int(len(test_a) / mod_size), mod_size))
@@ -198,27 +184,17 @@ if __name__ == '__main__':
     buffer_count = 0
     for ep in range(train_episodes):
         print('ep: ', ep)
-        '''        if buffer_count == 100:
-            print('in buffer')
-            for i in range(buffer_count):
-                buffer_episode = buffer[i]
-                for tup in buffer_episode[0]:
-                    env.buffer_step(target_net, tup[0],tup[1],tup[2],tup[3],buffer_episode[1])
-            buffer = {}
-            buffer_count = 0'''
         if (ep + 100) % 100 == 0:
             validation(env)
         else:
             #print('goal: ', env.goal)
             for curr in range(0, len(env.a), env.mod_size):
-                l,dist, done = env.step(target_net, env.a,curr, env.mod_size, env.goal)
+                l,dist, done = env.step(target_net, env.a,curr, env.goal)
                 total_loss += l
                 if dist > 0:
                     term_times += 1
                 if done:
                     print('distance: ', dist)
-                    buffer[buffer_count] = (env.buffer_record, env.buffer_goal)
-                    buffer_count += 1
                     #print('buffer count: ', buffer_count)
                     writer.add_scalar('Distance/train', dist, ep)
                     break
