@@ -57,8 +57,8 @@ class env():
     def __init__(self, arm_size):
         a = np.array([0, 0, 0, 0, 0, 0] * arm_size)
         self.state = torch.from_numpy(a).type(torch.FloatTensor)
-        goal = np.array([random.uniform(0.2, .4), random.uniform(0.2, .4),
-                         random.uniform(0.2, .4)])
+        goal = np.array([random.uniform(-.3, .3), random.uniform(-.3, .3),
+                         random.uniform(-.3, .3)])
         self.goal = torch.from_numpy(goal).type(torch.FloatTensor)
         self.arm_size = arm_size
         self.prev_action = 1
@@ -80,9 +80,10 @@ class env():
         a = np.array([0, 0, 0, 0, 0, 0] * self.arm_size)
         self.state = torch.from_numpy(a).type(torch.FloatTensor)
         self.prev_action = 1
-        goal = np.array([random.uniform(0.2, .4), random.uniform(0.2, .4),
-                         random.uniform(0.2, .4)])
+        goal = np.array([random.uniform(-.3, .3), random.uniform(-.3, .3),
+                         random.uniform(-.3, .3)])
         self.goal = torch.from_numpy(goal).type(torch.FloatTensor)  # randomizing location of goal
+        self.buffer_goal = []
         self.sequence = []
         self.failed = 0
 
@@ -101,13 +102,11 @@ class env():
         next_a = copy.deepcopy(a)
         next_a[curr: curr + self.mod_size] = self.actions[action]
 
-        self.state = copy.deepcopy(next_a)
-
         # obtaining reward for new arrangement and distance from goal if terminal arrangement
         r, dist, pos  = reward(next_a, curr, self.mod_size, goal, action, modules)
 
         if done:
-            if dist > .15:
+            if dist > .05:
                 self.buffer_goal = torch.from_numpy(np.array(pos)).type(torch.FloatTensor)
                 self.failed = 1
 
@@ -116,13 +115,14 @@ class env():
     def test_step(self, target_net, curr):
         values = target_net.forward(self.state, self.goal, 0).detach().numpy()
         qvals = masking(values, self.mod_size, self.prev_action)
+        print('qvals: ', qvals)
         action = np.argmax(qvals)
         self.prev_action = action
         self.state[curr: curr + self.mod_size] = self.actions[action]
         return action
 
 Transition = namedtuple('Transition',
-                        ('state', 'action', 'next_state', 'reward', 'goal'))
+                        ('state', 'action', 'next_state', 'reward', 'goal', 'done'))
 
 class ReplayMemory():
 
@@ -136,7 +136,6 @@ class ReplayMemory():
             self.memory.append(None)
         self.memory[self.position] = Transition(*args)
         self.position = (self.position + 1) % self.capacity
-
 
     def sample(self, batch_size):
         return random.sample(self.memory, batch_size)
@@ -175,18 +174,27 @@ def optimize_model(buffer, env, policy_net, target_net):
     next_state_batch = torch.cat(batch.next_state).view(env.batch_size,len(env.state))
     reward_batch = torch.cat(batch.reward)
     goal_batch = torch.cat(batch.goal).view(env.batch_size,len(env.goal))
+    done_batch = torch.cat(batch.done)
+    #print('done batch: ', done_batch)
+    #print('action batch: ', action_batch)
     # Bellman's equation for updating Q values
-    state_action_values = policy_net.forward(state_batch, goal_batch, 1)
-    state_action_values = state_action_values.gather(1, action_batch)
+    #print('state batch: ', state_batch)
+    state_action_values = policy_net.forward(state_batch, goal_batch, 1).gather(1, action_batch)
+    #print('state action values: ', state_action_values) # values for selecting action at each state
     next_state_vals = target_net.forward(next_state_batch, goal_batch, 1).max(1)[0].detach()
-    expected_state_action_values = reward_batch + policy_net.gamma * next_state_vals
+    #print('reward batch: ', reward_batch)
+    #print('next state values: ', policy_net.gamma * next_state_vals)
+    #print('next state values times done: ', policy_net.gamma * next_state_vals * done_batch)
+    expected_state_action_values = reward_batch + policy_net.gamma * next_state_vals * done_batch
+    #print('expect state action values: ', expected_state_action_values)
     # Computing loss
     loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
     policy_net.optimizer.zero_grad()
 
     # back-propagate loss
     loss.backward()
-
+    for param in policy_net.parameters():
+        param.grad.data.clamp_(-1, 1)
     # optimizer step
     policy_net.optimizer.step()
 
@@ -194,8 +202,8 @@ def optimize_model(buffer, env, policy_net, target_net):
 
 if __name__ == '__main__':
     # parameters
-    lr = 1e-4
-    gamma = .95
+    lr = 2e-3
+    gamma = .999
     train_episodes = 1000
     test_episodes = 50
     val_goals = [[.1, .1, .1], [.3, .3, .3], [.5, .5, .5]]
@@ -209,11 +217,12 @@ if __name__ == '__main__':
     target_net = DQN(len(env.state), env.mod_size,lr,gamma, len(env.goal))
     target_net.load_state_dict(policy_net.state_dict()) # sets target net equal to policy net to begin
 
-    buffer = ReplayMemory(200)
+    buffer = ReplayMemory(150)
     # training
     total_loss = 0
     dist = 0
-    TARGET_UPDATE = 25
+    TARGET_UPDATE = 50
+    LR_DECAY = 1000
     for ep in range(train_episodes):
         print('ep: ', ep)
         print('goal: ', env.goal)
@@ -228,7 +237,7 @@ if __name__ == '__main__':
             print('action: ', torch.tensor(np.array([action])).type(torch.LongTensor))
             print('reward: ', torch.tensor(np.array([r])).type(torch.FloatTensor))
             buffer.push(env.state, torch.tensor(np.array([action])).type(torch.LongTensor), next_a,
-                        torch.tensor(np.array([r])).type(torch.FloatTensor), env.goal)
+                        torch.tensor(np.array([r])).type(torch.FloatTensor), env.goal, torch.tensor(np.array([1 - done])).type(torch.LongTensor))
             if done:
                 if env.failed:
                     print('')
@@ -236,21 +245,23 @@ if __name__ == '__main__':
                     print('goal point was: ' + str(env.goal) + " while end eff position was " + str(env.buffer_goal))
                     print('distance was: ', dist)
                     env.sequence.append((env.state, torch.tensor(np.array([action])).type(torch.LongTensor), next_a,
-                                        torch.tensor(np.array([1.0])).type(torch.FloatTensor)))
+                                        torch.tensor(np.array([1.0])).type(torch.FloatTensor), done))
                     for part in env.sequence:
                         print('PUSHING TO BUFFER:')
                         print('state: ', part[0])
                         print('action: ', part[1])
                         print('reward: ', part[3])
                         print('new goal of: ', env.buffer_goal)
-                        buffer.push(part[0], part[1], part[2], part[3], env.buffer_goal)
+                        buffer.push(part[0], part[1], part[2], part[3], env.buffer_goal, torch.tensor(np.array([1 - part[4]])).type(torch.LongTensor))
                 l = optimize_model(buffer, env, policy_net, target_net)
+                #policy_net.lr = policy_net.lr*math.exp(-ep/LR_DECAY)
                 total_loss += l
                 writer.add_scalar('Distance/train', dist, ep)
                 break
             else:
                 env.sequence.append((env.state, torch.tensor(np.array([action])).type(torch.LongTensor), next_a,
-                        torch.tensor(np.array([r])).type(torch.FloatTensor)))
+                        torch.tensor(np.array([r])).type(torch.FloatTensor), done))
+            env.state = copy.deepcopy(next_a)
 
         if ep % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
@@ -259,16 +270,15 @@ if __name__ == '__main__':
         writer.add_scalar('Total Loss/train', total_loss,ep)
 
     # testing
-    final_dist = (0, 0)
     results = []
     for test in range(test_episodes):
+        print('goal: ', env.goal)
         for curr in range(0,len(env.state), env.mod_size):
             action = env.test_step(target_net,curr)
             if action == env.mod_size - 1:
                 final_dist = term_reward(env.state, env.mod_size, env.goal, curr, modules)
                 print('final distance: ', final_dist[0])
+                writer.add_scalar('Distance/test', final_dist[0], test)
                 break
-        test_a = env.state.numpy()
         env.reset()
-        writer.add_scalar('Distance/test', final_dist[0], test)
 

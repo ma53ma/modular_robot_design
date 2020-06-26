@@ -20,7 +20,6 @@ def masking(probs,mod_size, prev_action):
 
 def choose_action(network,a, mod_size, prev_action, goal, steps_done):
     # get Q values for arrangement
-    values = []
     with torch.no_grad():
         values = network.forward(a, goal, 0).detach().numpy()
 
@@ -29,7 +28,7 @@ def choose_action(network,a, mod_size, prev_action, goal, steps_done):
     sum = 0
     t_end = 0.05
     t_begin = 0.5
-    t_decay = 1000
+    t_decay = 500
     t = t_end + (t_begin - t_end)*np.exp(-steps_done / t_decay)
     for i in range(mod_size):
         sum += np.exp(values[i] / t)
@@ -57,7 +56,10 @@ def reward(a, curr, mod_size, goal, action, modules):
         #    cost -= mass_weight*masses[i % len(masses)]
     mod = a[curr:curr + mod_size]
     if mod[0] == 1: # accounting for number of actuators
-        rew -= act_weight
+        for i in range(0, len(a), mod_size):
+            curr_mod = a[i:i + mod_size]
+            if curr_mod[0] == 1:
+                rew -= act_weight
     if action == mod_size - 1 or curr == len(a) - mod_size: # if putting end effector on or at last module, obtain terminal reward
         dist, term_r, end_eff_pos = term_reward(a, mod_size, goal, curr, modules)
         rew += term_r
@@ -89,16 +91,13 @@ def term_reward(a, mod_size, goal, curr, modules):
         return dist, rew, end_eff_pos
 
 def pos_neg_rew(dist):
-    if dist < .2:
-        return math.exp(-dist)
-    else:
-        return -math.exp(dist) / 2
+    return 2*math.exp(-20*dist) - .25
 
 def soft_rew(dist):
     return math.exp(-10*dist)
 
 def binary_rew(dist):
-    if dist < .15:
+    if dist < .05:
         return 1
     else:
         return 0
