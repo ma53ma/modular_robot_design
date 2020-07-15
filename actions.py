@@ -87,6 +87,7 @@ def term_reward(a, mod_size, goal, curr, modules, env):
     if arrangement[-1] != modules[-1][0:2]: # if last module is not end-effector
         return 0, -1, (0.0, 0.0, 0.0) # just returning dist from goal as 0 and reward as -1
     else:
+        print('arrangement: ', arrangement)
         make_xml(arrangement, info) # generate the xacro for the arm
         cmd = 'rosrun xacro xacro custom.xacro > custom.urdf'
         os.system(cmd) # convert xacro to urdf
@@ -104,7 +105,7 @@ def pos_soft_rew(dist):
     return .5*math.exp(-40*dist) + 1
 
 def neg_soft_rew(dist):
-    return -8*dist
+    return -.8*dist
 
 def soft_rew(dist):
     return math.exp(-10*dist)

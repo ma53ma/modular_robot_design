@@ -12,9 +12,9 @@ import numpy as np
 from ddpg_create_xml import make_xml
 from pybullet_sim import sim
 from torch.utils.tensorboard import SummaryWriter
-from ddpg_actions import choose_action
-from ddpg_actions import reward
-from ddpg_actions import term_reward
+from toy_td3_actions import choose_action
+from toy_td3_actions import reward
+from toy_td3_actions import term_reward
 
 writer = SummaryWriter()
 
@@ -193,12 +193,12 @@ class Critic(nn.Module):
 
         self.var_pre_process = nn.Linear(self.n_actions, self.pre_process_dims)
 
-        self.fc1 = nn.Linear(self.a_dims + self.goal_size + self.pre_process_dims*self.n_actions, self.fc1_dims)
+        self.fc1 = nn.Linear(self.a_dims + self.goal_size + self.pre_process_dims*self.n_actions + self.n_actions, self.fc1_dims)
         #f1 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
         #T.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
         #T.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
 
-        self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
+        self.fc2 = nn.Linear(self.fc1_dims + self.n_actions, self.fc2_dims)
         #f2 = 1 / np.sqrt(self.fc2.weight.data.size()[0])
         #T.nn.init.uniform_(self.fc2.weight.data, -f2, f2)
         #T.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
@@ -262,13 +262,17 @@ class Critic(nn.Module):
         #goal_output = self.g1(goal)
         state_output = self.a1(state)
         if batch:
-            concat_state = T.cat((state_output, goal, pre_process_vars), 1)
+            concat_state = T.cat((state_output, goal, pre_process_vars, action), 1)
         else:
-            concat_state = T.cat((state_output, goal, pre_process_vars), 0)
+            concat_state = T.cat((state_output, goal, pre_process_vars, action), 0)
         # concat_state = F.relu(concat_state) # added
         state_value = self.fc1(concat_state)
         state_value = F.relu(state_value)
-        state_value = self.fc2(state_value)
+        if batch:
+            action_state_concat = T.cat((state_value, action), 1)
+        else:
+            action_state_concat = T.cat((state_value, action), 0)
+        #state_value = self.fc2(state_value)
         #state_value = F.relu(state_value)
         #state_value = self.fc3(state_value)
         #state_value = F.relu(state_value)
@@ -276,8 +280,11 @@ class Critic(nn.Module):
         #state_value = F.relu(state_value)
         #state_value = self.fc5(state_value)
 
-        action_value = F.relu(self.action_value(action))
-        state_action_value = F.relu(T.add(state_value, action_value))
+        #action_value = F.relu(self.action_value(action))
+        #print('state value: ', state_value)
+        #print('action: ', action)
+        state_action_value = F.relu(self.fc2(action_state_concat))
+        #state_action_value = F.relu(T.add(state_value, action_value))
         state_action_value = self.q(state_action_value)
         #print('q value: ', state_action_value.view(env.batch_size))
 
@@ -329,9 +336,13 @@ class env():
         self.gamma = 1
         self.l_cnt = 0
         self.active_l_cnt = 0
-        self.tau = 0.001
+        self.tau = 0.005
         self.explore_episodes = 0
         self.ep = 0
+        self.noise = 0.05
+        self.update_actor_interval = 10
+        self.learn_step_cntr = 0
+
 
     def reset(self):
         a = np.array([0, 0, 0, 0, 0,
@@ -357,6 +368,8 @@ class env():
         if self.active_l_cnt == self.l_cnt:
             done = 1
         next_variables = copy.deepcopy(self.variables)
+        print('action: ', action)
+        #print('next_variables: ', next_variables)
         next_variables[(self.active_l_cnt - 1)*self.num_d_vars:(self.active_l_cnt)*self.num_d_vars] = np.array(action)
         dist, rew, end_eff_pos = reward(self, curr, next_variables, self.goal)
 
@@ -420,7 +433,7 @@ def validation(env):
                             writer.add_scalar('Validation Goal 3 Variables/Twist 2', env.variables[i + 1], ep)
                 break
 
-def optimize_model(memory, env, actor, target_actor, critic, target_critic, ep):
+def optimize_model(memory, env, actor, target_actor, critic_1, target_critic_1, critic_2, target_critic_2, ep):
     if memory.position < env.batch_size:
         return
     transitions = memory.sample(env.batch_size)
@@ -445,29 +458,64 @@ def optimize_model(memory, env, actor, target_actor, critic, target_critic, ep):
     # calculate target actions from bellman's equation?
     target_actions = target_actor.forward(state_batch, next_variables_batch, goal_batch, 1, env)
 
+    length_smoothing = T.clamp(T.tensor(np.random.normal(scale=env.noise, size=1), dtype=T.float),-.15,.15)
+    twist_smoothing = T.clamp(T.tensor(np.random.normal(scale=np.pi / 6, size=1), dtype=T.float),-0.5,0.5)
+    smoothing = T.cat((length_smoothing,twist_smoothing),0).view(env.n_actions)
+    noisy_target_actions = target_actions + smoothing
+    print('noisy target actions: ', noisy_target_actions)
+    #min = T.min(noisy_target_actions, T.tensor([[0.0, 0.0]],dtype=T.float))
+    #print('min: ', min)
+    clamped_target_actions = T.max(T.min(noisy_target_actions, T.tensor(env.action_bounds,dtype=T.float)), T.tensor([[0.05, 0.0]], dtype=T.float))
+    #clamped_target_actions = T.tensor(np.array([]),dtype=T.float)
+    #clamped_target_actions = T.cat((clamped_target_actions, T.clamp(noisy_target_actions[0], 0.05, env.action_bounds[0])),0)
+    #clamped_target_actions = T.cat((clamped_target_actions, T.clamp(noisy_target_actions[1], 0, env.action_bounds[1])),0)
+    print('clamped target actions: ', clamped_target_actions)
     # for the new state, getting target action actions from target actor network
     # what actions should target critic take based on target actor's estimates of actions
-    target_critic_value = target_critic.forward(state_batch, next_variables_batch, goal_batch, target_actions, 1, env)
-    # what was the estimate of the values of the states and actions we encountered in our sample of replay buffer
-    critic_value = critic.forward(state_batch, variables_batch, goal_batch, action_batch, 1, env)
+    target_critic_value_1 = target_critic_1.forward(state_batch, next_variables_batch, goal_batch, clamped_target_actions, 1, env)
+    target_critic_value_2 = target_critic_2.forward(state_batch, next_variables_batch, goal_batch, clamped_target_actions, 1, env)
+    #print('target critic value 1: ', target_critic_value_1)
+    #print('target critic value 2: ', target_critic_value_2)
 
+    # what was the estimate of the values of the states and actions we encountered in our sample of replay buffer
+    critic_value_1 = critic_1.forward(state_batch, variables_batch, goal_batch, action_batch, 1, env)
+    critic_value_2 = critic_2.forward(state_batch, variables_batch, goal_batch, action_batch, 1, env)
+
+    target_critic_value = T.min(target_critic_value_1, target_critic_value_2)
     # calculating our target values using Bellman's Equation
     #print('variables batch: ', variables_batch)
     #print('next variables batch: ', next_variables_batch)
+    print('target critic value: ', target_critic_value)
     target = reward_batch + env.gamma * target_critic_value * done_batch
-    #print('target: ', target.view(env.batch_size, 1))
+    print('target: ', target.view(env.batch_size, 1))
     #print('critic value: ', critic_value.view(env.batch_size, 1))
-
     #  whenever we calculate loss, want to zero gradients so gradients from
     # prev. steps don't accumulate and interfere with current calculations
     # Critic loss
-    critic.optimizer.zero_grad()
-    critic_loss = F.mse_loss(target, critic_value)
+    critic_1.optimizer.zero_grad()
+    critic_2.optimizer.zero_grad()
+    q1_loss = F.mse_loss(target,critic_value_1)
+    q2_loss = F.mse_loss(target,critic_value_2)
+    #print('target: ', target)
+    #print('critic value 1: ', critic_value_1)
+    #print('critic value 2: ', critic_value_2)
+    critic_loss =  q1_loss + q2_loss
+    #print('critic loss: ', critic_loss)
     writer.add_scalar('Critic Loss/train', critic_loss, ep)
     critic_loss.backward()
-    for param in critic.parameters():
-        param.grad.data.clamp_(-1, 1)
-    critic.optimizer.step()
+    for param in critic_1.parameters():
+        if param.grad is not None:
+            param_norm = T.norm(param.grad)
+            param = T.div(param,param_norm)
+    critic_1.optimizer.step()
+    critic_2.optimizer.step()
+
+    env.learn_step_cntr += 1
+
+    if env.learn_step_cntr % env.update_actor_interval != 0:
+        return
+
+
     #critic_scheduler.step()
     #critic.lr = critic.init_lr*math.exp(-ep/LR_DECAY)
 
@@ -475,57 +523,59 @@ def optimize_model(memory, env, actor, target_actor, critic, target_critic, ep):
     actor.optimizer.zero_grad()
 
     # implicitly calculates chain rule for actor/critic derivatives
-    actor_loss = -critic.forward(state_batch, variables_batch, goal_batch,
+    actor_loss = critic_1.forward(state_batch, variables_batch, goal_batch,
                                         actor.forward(state_batch, variables_batch, goal_batch, 1, env), 1, env)
     #print('actor loss: ', actor_loss)
-    actor_loss = T.mean(actor_loss)
+    actor_loss = -T.mean(actor_loss)
     writer.add_scalar('Actor Loss/train', actor_loss, ep)
     actor_loss.backward()
-    for param in critic.parameters():
-        if param.grad.data is not None:
-            param.grad.data.clamp_(-1, 1)
+    #for param in critic.parameters():
+    #    if param.grad.data is not None:
+    #        param.grad.data.clamp_(-1, 1)
     actor.optimizer.step()
     #actor_scheduler.step()
     #actor.lr = actor.init_lr*math.exp(-ep/LR_DECAY)
 
-    soft_update_network_parameters(actor, target_actor, critic, target_critic, env.tau)
+    soft_update_network_parameters(actor, target_actor, critic_1, target_critic_1, critic_2, target_critic_2, env.tau)
 
-def soft_update_network_parameters(actor, target_actor, critic, target_critic, tau):
-    # tau is param that lets update of target network to gradually approach the evaluation networks
-    # good for nice and slow convergence
-    '''actor_params = actor.named_parameters()
-    critic_params = critic.named_parameters()
+def soft_update_network_parameters(actor, target_actor, critic_1, target_critic_1, critic_2, target_critic_2, tau):
+    if tau is None:
+        tau = self.tau
+
+    actor_params = actor.named_parameters()
+    critic_1_params = critic_1.named_parameters()
+    critic_2_params = critic_2.named_parameters()
     target_actor_params = target_actor.named_parameters()
-    target_critic_params = target_critic.named_parameters()
+    target_critic_1_params = target_critic_1.named_parameters()
+    target_critic_2_params = target_critic_2.named_parameters()
 
-    critic_state_dict = dict(critic_params)
-    actor_state_dict = dict(actor_params)
-    target_critic_dict = dict(target_critic_params)
+    critic_1_dict = dict(critic_1_params)
+    critic_2_dict = dict(critic_2_params)
+    actor_dict = dict(actor_params)
     target_actor_dict = dict(target_actor_params)
+    target_critic_1_dict = dict(target_critic_1_params)
+    target_critic_2_dict = dict(target_critic_2_params)
 
-    for name in critic_state_dict:
-        critic_state_dict[name] = tau*critic_state_dict[name].clone() + (1 - tau)*target_critic_dict[name].clone()
+    for name in critic_1_dict:
+        critic_1_dict[name] = tau * critic_1_dict[name].clone() + \
+                         (1 - tau) * target_critic_1_dict[name].clone()
+    for name in critic_2_dict:
+        critic_2_dict[name] = tau * critic_2_dict[name].clone() + \
+                         (1 - tau) * target_critic_2_dict[name].clone()
+    for name in actor_dict:
+        actor_dict[name] = tau * actor_dict[name].clone() + \
+                      (1 - tau) * target_actor_dict[name].clone()
 
-    # iterates over dictionary, looks at key, and updates values from this network
-    target_critic.load_state_dict(critic_state_dict)
-
-    for name in actor_state_dict:
-        actor_state_dict[name] = tau*actor_state_dict[name].clone() + (1 - tau)*target_actor_dict[name].clone()
-
-    # iterates over dictionary, looks at key, and updates values from this network
-    target_actor.load_state_dict(actor_state_dict)'''
-    #for target_param, param in zip(target_actor.parameters(), actor.parameters()):
-    #    target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
-    for target_param, param in zip(target_critic.parameters(), critic.parameters()):
-        target_param.data.copy_(target_param.data * (1.0 - tau) + param.data * tau)
-
+    target_critic_1.load_state_dict(critic_1_dict)
+    target_critic_2.load_state_dict(critic_2_dict)
+    target_actor.load_state_dict(actor_dict)
 
 def hard_update_network_parameters(actor, target_actor, critic, target_critic):
     # hard update version
     for target_param, param in zip(target_actor.parameters(), actor.parameters()):
         target_param.data.copy_(param.data)
-    for target_param, param in zip(target_critic.parameters(), critic.parameters()):
-        target_param.data.copy_(param.data)
+    #for target_param, param in zip(target_critic.parameters(), critic.parameters()):
+    #    target_param.data.copy_(param.data)
     #target_actor.load_state_dict(actor.state_dict())
     #target_critic.load_state_dict(critic.state_dict())
 
@@ -535,8 +585,9 @@ if __name__ == '__main__':
 
     buffer = ReplayMemory(100)
     env = env(arm_size=6, n_actions=2, action_bounds= [.75,2*np.pi], num_d_vars=2)
-    noise = ActionNoise()
+    #noise = ActionNoise()
 
+    noise = 0.05
     #for curr in range(0, len(env.state), env.mod_size):
     #    mod = env.state[curr:curr + env.mod_size]
     #    if mod[-2] == 1:
@@ -546,7 +597,7 @@ if __name__ == '__main__':
     var_size = n_actions * env.l_cnt
     lr_actor = .0001
     lr_critic = .001
-    train_episodes = 10000
+    train_episodes = 6000
     test_episodes = 50
     explore_episodes = 500
     env.explore_episodes = explore_episodes
@@ -555,13 +606,21 @@ if __name__ == '__main__':
                   fc2_dims=128, a_dims= 64, v_dims= 10, lr_actor=lr_actor,action_bound=[.75,2*np.pi])
     target_actor = Actor(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,fc1_dims=400,
                          fc2_dims=128, a_dims= 64, v_dims= 10, lr_actor=lr_actor,action_bound=[.75,2*np.pi])
-    critic = Critic(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,fc1_dims=400,
+    critic_1 = Critic(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,fc1_dims=400,
                     fc2_dims=128, a_dims= 64, v_dims= 10, lr_critic=lr_critic)
-    target_critic = Critic(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,fc1_dims=400,
+    target_critic_1 = Critic(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,fc1_dims=400,
                            fc2_dims=128,  a_dims= 64, v_dims= 10, lr_critic=lr_critic)
+    critic_2 = Critic(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,
+                      fc1_dims=400,
+                      fc2_dims=128, a_dims=64, v_dims=10, lr_critic=lr_critic)
+    target_critic_2 = Critic(input_size=len(env.state), goal_size=len(env.goal), var_size=var_size, n_actions=n_actions,
+                             fc1_dims=400,
+                             fc2_dims=128, a_dims=64, v_dims=10, lr_critic=lr_critic)
 
     # initialize networks to have the same features
-    hard_update_network_parameters(actor, target_actor, critic, target_critic)
+    #hard_update_network_parameters(actor, target_actor, critic, target_critic)
+    soft_update_network_parameters(actor, target_actor, critic_1, target_critic_1,
+                                   critic_2, target_critic_2, tau=1)
 
     for ep in range(train_episodes):
         env.ep = ep
@@ -569,7 +628,7 @@ if __name__ == '__main__':
         print('goal: ', env.goal)
         #print('actor lr: ', actor.lr)
         #print('critic lr: ', critic.lr)
-        if ep % 10 == 0:
+        if ep % 25 == 0:
             print('episode: ', ep)
             validation(env)
             env.reset()
@@ -589,7 +648,7 @@ if __name__ == '__main__':
                 env.state[curr + env.mod_size: curr + 3 * env.mod_size] = env.a_add[env.active_l_cnt]
             #print('state after: ', env.state)
 
-            action = choose_action(actor, env.state, env.variables, env.goal, env, noise, ep, critic)
+            action = choose_action(actor, env.state, env.variables, env.goal, env, noise, ep)
             next_variables, rew, dist, done = env.step(curr, action)
             #print('PUSHING TO BUFFER')
             #print('state: ', env.state)
@@ -647,7 +706,7 @@ if __name__ == '__main__':
                                      T.tensor(np.array([action])).type(T.FloatTensor),
                                      T.tensor(np.array([rew])).type(T.FloatTensor),
                                      T.tensor(np.array([1 - done])).type(T.LongTensor)))
-            optimize_model(buffer,env, actor, target_actor, critic, target_critic, ep)
+            optimize_model(buffer,env, actor, target_actor, critic_1, target_critic_1, critic_2, target_critic_2, ep)
             env.variables = copy.deepcopy(next_variables)
             #print('env variables copied as: ', env.variables)
         #if ep % TARGET_UPDATE == 0:

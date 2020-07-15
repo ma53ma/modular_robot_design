@@ -70,7 +70,7 @@ class env():
                         torch.from_numpy(np.array([0, 0, 0, 0, 1, 0])).type(torch.FloatTensor),
                         torch.from_numpy(np.array([0, 0, 0, 0, 0, 1])).type(torch.FloatTensor)]
         self.mod_size = len(self.actions)
-        self.batch_size = 100
+        self.batch_size = 25
 
         self.buffer_goal = []
         self.buffer_reward = []
@@ -176,8 +176,10 @@ def validation(env):
                     writer.add_scalar('Validation Distance/(.2,.2,.2)', final_dist[0], ep)
                 elif goal == val_goals[2]:
                     writer.add_scalar('Validation Distance/(.3,.3,.3)', final_dist[0], ep)
-                else:
+                elif goal == val_goals[3]:
                     writer.add_scalar('Validation Distance/(.4,.4,.4)', final_dist[0], ep)
+                else:
+                    writer.add_scalar('Validation Distance/(.5,.5,.5)', final_dist[0], ep)
                 break
         env.reset()
 
@@ -190,40 +192,18 @@ def optimize_model(buffer, env, policy_net, target_net, optimizer):
     action_batch = torch.cat(batch.action).view(env.batch_size,1)
     goal_batch = torch.cat(batch.goal).view(env.batch_size,len(env.goal))
     mask_batch = torch.cat(batch.mask).view(env.batch_size, env.mod_size)
-    #curr_mask_batch = torch.cat(batch.curr).view(env.batch_size, env.mod_size)
-    #print('curr mask batch: ', curr_mask_batch)
-    #curr_mask_transposed = torch.transpose(curr_mask_batch, 0, 1)[0].unsqueeze(1)
-    #print('curr mask transposed: ', )
-    #print('mask: ', mask_batch)
-    #print('states: ', state_batch.unsqueeze(0))
-    #print('actions: ', action_batch.unsqueeze(0))
-    #print('goals: ', goal_batch.unsqueeze(0))
-    #print('state size: ', state_batch.size())
-    #print('goal size: ', goal_batch.size())
     state_action_values = policy_net(state_batch, goal_batch, 1).gather(1, action_batch)
-    #final_state_values = state_action_values[curr_mask_batch]
-    #print('')
-    #print('final state values: ', final_state_values.view(int(len(final_state_values)/env.mod_size),env.mod_size))
-    #print('final actions: ', action_batch[curr_mask_transposed])
-    #final_state_action_values = state_action_values[curr_mask_transposed]
-    #print('final state action values: ', final_state_action_values)#.view(int(len(final_state_action_values)/env.mod_size),1))
 
-    #print('state action values: ', state_action_values)
     next_state_batch = torch.cat(batch.next_state).view(env.batch_size,len(env.state))
     next_state_vals = target_net(next_state_batch, goal_batch, 1).detach()
     next_state_vals[mask_batch] = -float('inf')
-    #print('masked next state values: ', next_state_vals)
-    #print('final next state values: ', next_state_vals[curr_mask_batch])
 
     max_next_state_vals = next_state_vals.max(1)[0]
-    #print('max next state values: ', next_state_vals)
     done_batch = torch.cat(batch.done)
     reward_batch = torch.cat(batch.reward)
-    #print('rewards: ', reward_batch)
 
     expected_state_action_values = reward_batch + policy_net.gamma * max_next_state_vals * done_batch
-    #print('final expected state action values: ', expected_state_action_values.unsqueeze(1)[curr_mask_transposed])
-    #print('')
+
     # Computing loss
     loss = F.smooth_l1_loss(state_action_values, expected_state_action_values.unsqueeze(1))
     optimizer.zero_grad()
@@ -236,19 +216,18 @@ def optimize_model(buffer, env, policy_net, target_net, optimizer):
     optimizer.step()
     scheduler.step()
 
-
     return loss.item()
 
 if __name__ == '__main__':
     # parameters
     lr = 2e-3
     LR_DECAY = 1000
-    gamma = .999
+    gamma = 1
     train_episodes = 1000
     test_episodes = 50
-    val_goals = [[.1, .1, .1], [.2, .2, .2], [.3, .3, .3], [.4, .4, .4]]
+    val_goals = [[.1, .1, .1], [.2, .2, .2], [.3, .3, .3], [.4, .4, .4], [.5,.5,.5]]
 
-    env = env(arm_size=10) # initialize environment
+    env = env(arm_size=8) # initialize environment
 
     # initialize policy network where we are frequently updating weights
     policy_net = DQN(len(env.state), env.mod_size,lr,gamma, len(env.goal))
@@ -262,11 +241,11 @@ if __name__ == '__main__':
     lambda1 = lambda ep: math.exp(-ep / LR_DECAY)
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda1)
 
-    buffer = ReplayMemory(1000)
+    buffer = ReplayMemory(100)
     # training
     total_loss = 0
     dist = 0
-    TARGET_UPDATE = 100
+    TARGET_UPDATE = 10
     for ep in range(train_episodes):
         env.reset()
         print('ep: ', ep)

@@ -16,48 +16,28 @@ EPS_END = .05
 EPS_START = .9
 EPS_DECAY = 500
 
-def choose_action(actor, state, variables, goal, env, noise, ep, critic):
-    sample = random.random()
-    eps_threshold = EPS_END + (EPS_START - EPS_END) * \
-        math.exp(-1. * ep / EPS_DECAY)
-    #print('sample: ', sample)
-    #print('threshold: ', eps_threshold)
-    #if ep < 300:
-    #    sample =
-    #if ep >= env.explore_episodes:
-    if sample > .1:
-        print('exploitation')
-        #noise(ep, actor, critic)
-        mu = actor(state, variables, goal, 0, env)
-        #print('mu: ', mu)
-        #noise = T.tensor(noise(ep), dtype=T.float)
-        #print('noise tensor: ', noise)
-        #mu_prime = T.add(mu,noise)
-        #print('mu prime: ', mu_prime)
-        if mu[0] > env.action_bounds[0]:
-            mu[0] = env.action_bounds[0]
-        if mu[0] <= 0.05:
-            mu[0] = 0.05
-        if mu[1] > env.action_bounds[1]:
-            mu[1] = env.action_bounds[1]
-        if mu[1] <= 0:
-            mu[1] = 0
-        #print('mu prime: ', mu_prime)
-        #print('mu prime: ', mu_prime)
-
-        return mu.detach().numpy()
-    else:
-        #print('exploration')
+def choose_action(actor, state, variables, goal, env, noise, ep):
+    if ep < env.explore_episodes:
+        # gaussian distribution
+        #random_length = np.random.normal(loc=.375,scale=.125, size=1)
+        #random_twist = np.random.normal(loc=np.pi,scale=np.pi/3, size=1)
+        #mu = T.tensor(np.array([random_length, random_twist]),dtype=T.float).view(env.n_actions)
+        # uniform distribution
         random_length = random.uniform(0.05, env.action_bounds[0])
         random_twist = random.uniform(0, env.action_bounds[1])
-        random_action = np.array([random_length, random_twist])
-        return random_action
-    '''    if env.active_l_cnt == 1:
-        return np.array([0.63451004, 5.85006762])
+        mu = T.tensor(np.array([random_length, random_twist]),dtype=T.float).view(env.n_actions)
     else:
-        return np.array([0.75, 6.28318548])'''
-
-
+        mu = actor.forward(state, variables, goal, 0, env)
+    print('mu: ', mu)
+    length_noise = np.random.normal(scale=env.noise, size=1)
+    twist_noise = np.random.normal(scale=np.pi/6, size=1)
+    noise = T.tensor(np.array([length_noise, twist_noise]),dtype=T.float).view(env.n_actions)
+    print('noise: ', noise)
+    mu_prime = mu + noise
+    mu_prime[0] = T.clamp(mu_prime[0], 0.05, env.action_bounds[0])
+    mu_prime[1] = T.clamp(mu_prime[1], 0, env.action_bounds[1])
+    print('mu prime: ', mu_prime)
+    return mu_prime.cpu().detach().numpy()
 
 def reward(env, curr, next_variables, goal):
     #act_weight = 0.025
