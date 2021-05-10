@@ -9,38 +9,49 @@ LOG_SIG_MAX = 0
 LOG_SIG_MIN = -20
 epsilon = 1e-6
 
-# initializes weights, don't know what it does
+# initializes weights, for each layers
 def weights_init_(m):
     if isinstance(m, nn.Linear):
         T.nn.init.xavier_uniform_(m.weight, gain=1)
         T.nn.init.constant_(m.bias,0)
 
+# DQN network for discrete actions
 class DQN(nn.Module):
-    def __init__(self, state_size, action_size, lr, gamma, target_size, pre_process_dims, n_vars,l_cnt,c_size):
+    def __init__(self, state_size, action_size, lr, gamma, target_size, pre_process_dims, num_des_vars,l_cnt,c_size):
         super(DQN, self).__init__()
+        ## HYPERPARAMETERS ##
+        # using mean squared error for loss
         self.loss_fn = nn.MSELoss()
         self.lr = lr
         self.gamma = gamma
+        # dimensions used for pre-processing actions (not currently used)
         self.pre_process_dims = pre_process_dims
-        self.n_actions = n_vars
+        # maximum number of design variables for each individual module
+        self.num_des_vars = num_des_vars
 
+        # layer for variable pre-processing
         self.var_pre_process = nn.Linear(self.n_actions, self.pre_process_dims)
+        # model for DQN
         self.model = nn.Sequential(nn.Linear(64 + l_cnt * n_vars + target_size + c_size, 128),
                                    nn.ReLU(), nn.Linear(128, 64), nn.ReLU(), nn.Linear(64, 32),
                                    nn.ReLU(), nn.Linear(32, action_size))
+        # goal processing layer
         self.goal_layer = nn.Linear(target_size, 9)
+        # state processing layer
         self.a_layer = nn.Linear(state_size, 64)
+        # latent encoding layer
         self.latent_layer = nn.Linear(64 + l_cnt * n_vars + target_size + c_size, 32)
 
         self.apply(weights_init_)
 
     def forward(self, state, variables, goal, c, batch, env):
         #c = T.tensor(np.array([c])).type(T.FloatTensor)
-        masked_batch_size = len(variables)
+        # reshaping tensors based on if batch pass or individual pass
         if batch:
             #print('variables: ', variables)
             tensor_variables = variables
             '''
+            masked_batch_size = len(variables)
             pre_process_vars = T.from_numpy(np.zeros((masked_batch_size, env.l_cnt * self.pre_process_dims))).type(
                 T.FloatTensor)
             for i in range(0, env.num_vars * env.l_cnt, env.num_vars):
@@ -68,7 +79,7 @@ class DQN(nn.Module):
                     pre_process_vars[i * int(self.pre_process_dims / self.n_actions):i * int(
                         self.pre_process_dims / self.n_actions) + self.pre_process_dims] = output
             '''
-
+        # optional elements to use for passing state or goal through a layer
         a_res = self.a_layer(state)
         goal_res = self.goal_layer(goal)
         if batch:
@@ -79,6 +90,8 @@ class DQN(nn.Module):
             tot_res = T.cat((a_res, tensor_variables, goal, c), 0)
             Z = self.latent_layer(tot_res)
         #print('tot_res', tot_res)
+
+        # returning Q values and latent representations of the state
         return self.model(tot_res), Z
 
 # critic network
@@ -86,6 +99,7 @@ class QNetwork(nn.Module):
     def __init__(self, n_actions, l_cnt, Z_size, a_dims, pre_process_dims, fc1_dims, fc2_dims):
         super(QNetwork, self).__init__()
 
+        # different dimension sizes for layers
         self.a_dims = a_dims
         self.pre_process_dims = pre_process_dims
         self.n_actions = n_actions
@@ -94,16 +108,22 @@ class QNetwork(nn.Module):
         self.l_cnt = l_cnt
         self.Z_size = Z_size
 
+        # mean squared error for loss function
         self.loss_fn = nn.MSELoss()
 
         # Q1 architecture
+        # variable pre-processing layer
         self.var_pre_process1 = nn.Linear(self.n_actions, self.pre_process_dims)
+        # action pre-processing layer
         self.action_pre_process1 = nn.Linear(self.n_actions, self.pre_process_dims)
         #self.a1 = nn.Linear(self.input_size + self.goal_size, self.a_dims)
         #self.g1 = nn.Linear(self.goal_size, self.g_dims)
         #self.linear1 = nn.Linear(self.Z_size + self.pre_process_dims, self.fc1_dims)
+        # state+action fully connected layer
         self.linear1 = nn.Linear(self.Z_size + self.n_actions + 1, self.fc1_dims)
+        # second fully connected / hidden layer
         self.linear2 = nn.Linear(self.fc1_dims, self.fc2_dims)
+        # output layer with q value for single action
         self.q1 = nn.Linear(self.fc2_dims, 1)
 
         # Q2 architecture
@@ -195,6 +215,7 @@ class QNetwork(nn.Module):
 
         return state_action_value1, state_action_value2
 
+# continuous actor, using a Gaussian probability distribution
 class GaussianPolicy(nn.Module):
     def __init__(self, n_actions, l_cnt, Z_size, a_dims, pre_process_dims, fc1_dims, fc2_dims, action_space):
         super(GaussianPolicy, self).__init__()
@@ -274,37 +295,3 @@ class GaussianPolicy(nn.Module):
         log_std = self.log_std_linear(output2)
         log_std = T.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std
-
-    def sample(self, Z, batch, env):
-        mean, log_std = self.forward(Z, batch, env)
-        std = log_std.exp()
-        #normal = Normal(0, 1)
-        normal = Normal(0, 1) # what should mean and std be here?
-        x_t = normal.rsample() # for reparameterization trick
-        y_t = T.tanh(x_t*std + mean)
-        #y_t = T.sigmoid(x_t) # actions (changing from tanh to sigmoid
-        # action = y_t
-        #print('un scaled action: ', y_t)
-        action = y_t * self.action_scale + self.action_bias # other people do not use scale or bias
-        #print('scaled and bias action: ', action)
-        log_prob = normal.log_prob(x_t)
-
-        # enforcing action bound
-        #log_prob -= T.log(1 - y_t.pow(2) + epsilon)
-        #print('self.action_scale: ', self.action_scale)
-        #print('y_t: ', y_t)
-        log_prob -= T.log(self.action_scale * (1 - y_t.pow(2)) + epsilon)
-        #print('log prob: ', log_prob)
-
-        # make these negative?
-        if batch:
-            log_prob = log_prob.sum(1, keepdim=True)
-        else:
-            log_prob = log_prob.sum(0, keepdim=True)
-        # mean = T.tanh(means)
-        #print('mean: ', mean)
-        #print('self.action_scale: ', self.action_scale)
-        #print('self.action_bias: ', self.action_bias)
-        mean = T.tanh(mean) * self.action_scale + self.action_bias
-        #print('new mean: ', mean)
-        return action, log_prob, mean
