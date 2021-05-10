@@ -11,10 +11,12 @@ import os.path
 import subprocess
 import tempfile
 
+# opening up .csv file with specific information about the module types
 with open('dqn_sac.csv') as f:
     reader = csv.reader(f)
     modules = list(reader)
 
+# function that performs action masking based on previous action
 def masking(probs,mod_size, prev_action):
     if prev_action > 0: # if the previous module was not an actuator, mask all but the actuator
         mask_range = [1,mod_size]
@@ -24,9 +26,10 @@ def masking(probs,mod_size, prev_action):
 
     return probs
 
+# function that choose the continuous action from the SAC networks
 def sac_choose_action(env, max_q_val, action_space, ep, agent):
     #print('SAC CHOOSE ACTION')
-    if ep < env.explore_episodes:
+    if ep < env.explore_episodes: # if within exploration period
         if max_q_val == 0 or max_q_val == 1 or max_q_val == 3:
             action = np.array([0])
         else:
@@ -34,7 +37,7 @@ def sac_choose_action(env, max_q_val, action_space, ep, agent):
             #random_twist = random.uniform(action_space[1][0], action_space[1][1])
             action = np.array([random_length])#, random_twist])
             #print('sac action is: ', action)
-    else:
+    else: # if within exploitation period
         action = agent.select_action(env.Z, max_q_val, env,evaluate=env.evaluate)
 
     #print('env active l cnt before: ', env.active_l_cnt)
@@ -43,28 +46,22 @@ def sac_choose_action(env, max_q_val, action_space, ep, agent):
     #print('sac action: ', action)
     return action
 
+# function that choose the discrete action from the DQN network
 def dqn_choose_action(env, agent,a, mod_size, prev_action, goal, ep, curr):
     # get Q values for arrangement
     with T.no_grad():
         q_vals, Z = agent.dqn.forward(a, env.variables, goal, T.tensor(np.array([curr])).type(T.FloatTensor), 0, env)
         values = q_vals.detach().numpy()
     values = masking(values, mod_size, prev_action)
-    if ep < env.explore_episodes:
+    if ep < env.explore_episodes: # in exploration phase
         if prev_action > 0:
             act = 0
         else:
             choices = list(range(1, env.mod_size))
             act = np.random.choice(choices)
-            #if curr == len(a) - mod_size:
-            #    probs = [.05,.05,.05,.85]
-            #    act = np.random.choice(choices, p=probs)
-            #    print('randomly chosen dqn action: ', act)
-            #else:
-            #    act = np.random.choice(choices)
         return act, Z
-    else:
+    else: # in exploitation phase
         # boltzmann exploration
-        #probs = [0] * mod_size
         sum = 0
         t_end = 0.01
         t_begin = 0.5
@@ -74,7 +71,8 @@ def dqn_choose_action(env, agent,a, mod_size, prev_action, goal, ep, curr):
         max_val = np.amax(values)
         values = np.subtract(values, max_val)
         #print('values before subtract: ', values)
-        #values = np.clip(values,a_min=None, a_max=10)
+
+        # normalizing
         for i in range(mod_size):
             sum += np.exp(values[i] / t)
         for i in range(mod_size):
@@ -88,42 +86,51 @@ def dqn_choose_action(env, agent,a, mod_size, prev_action, goal, ep, curr):
         act = np.random.choice(range(mod_size), p=values)
         return act, Z
 
-# reward function
+# reward function for discrete actions
 def dqn_reward(variables, a, curr, mod_size, goal, action, modules, env):
     ## NOT USED FOR LINKS
-    masses = [.315, .215, 0, 0.0]
+    # masses for each module type
+    masses = [.315, .215, 0.0, 0.0]
+    # weights for mass and actuator penalties
     mass_weight = 0.1
     act_weight = 0.025
     rew = 0
     a = a.numpy()
     mod = a[curr:curr + mod_size]
+    # penalizing for mass of current module
     for j in range(len(mod)):
         if mod[j] == 1:
             rew -= mass_weight*masses[j]
+    # penalizing for actuator if added
     if mod[0] == 1: # accounting for number of actuators
         rew -= act_weight
+    # penalizing if last possible module added is not a gripper
     if curr == len(a) - mod_size and mod[-1] != 1:
         print('not terminal')
         rew -= 1
     return rew
 
+# reward function for continuous actions
 def sac_reward(next_a, env, curr, next_variables, goal):
+    # weight for length of link
     length_weight = .1
     rew = 0
     pos_dist = 0
     orient_dist = 0
     end_eff_pos = (0.0, 0.0, 0.0)
-    if env.prev_action == env.mod_size - 2:
+    if env.prev_action == env.mod_size - 2: # penalizing for length of link if link is added
         #for i in range(0, len(next_variables), 2):
         #    if next_variables[i] > 0:
         # print('next_variables[(env.active_l_cnt - 1)*env.num_vars]:', next_variables[(env.active_l_cnt - 1)*env.num_vars])
         rew -= ((0.4 * (next_variables[(env.active_l_cnt - 1)*env.num_vars] + 0.03) + 0.26)*length_weight)
-    elif env.prev_action == env.mod_size - 1:
+    elif env.prev_action == env.mod_size - 1: # adding in terminal reward if gripper is added
         pos_dist,orient_dist, term_rew, end_eff_pos = sac_term_reward(next_a, env, curr, goal, next_variables)
         rew += term_rew
     return pos_dist, orient_dist,rew, end_eff_pos
 
+# terminal reward function for when gripper is added
 def sac_term_reward(next_a, env, curr, goal, next_variables):
+    # configuring syntax for an xacro
     arrangement = [''] * int((len(next_a) / env.mod_size))
     info = ['DQN-SAC-Result', '0.0.1']
     action_tuple = next_variables.reshape((env.l_cnt,env.num_vars))
@@ -167,6 +174,7 @@ def sac_term_reward(next_a, env, curr, goal, next_variables):
     cmd = 'xacro dqn_sac.xacro > dqn_sac.urdf'
     os.system(cmd)  # convert xacro to urdf
     pos_dist, orient_dist, end_eff_pos = sim(goal, env.pos_epsilon, env.orient_epsilon)  # do pybullet simulation for IK
+    # finding reward for simulation result
     if env.orientation:
         rew = binary_orient_rew(pos_dist, orient_dist, env)
         if rew == 1.5:
@@ -175,6 +183,7 @@ def sac_term_reward(next_a, env, curr, goal, next_variables):
         rew = binary_rew(pos_dist, env)
     return pos_dist, orient_dist, rew, end_eff_pos
 
+# different reward functions for simulation
 def pos_neg_soft(dist, env):
     if dist < env.epsilon:
         return pos_soft_rew(dist)

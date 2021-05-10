@@ -12,13 +12,14 @@ from sac_utils import soft_update, hard_update
 from both_models import GaussianPolicy, QNetwork, DQN
 from torch.distributions import Normal
 
-
+# setting up syntax for buffer samples
 Transition = namedtuple('Transition',
                         ('state', 'variables', 'next_state','next_variables', 'goal','c','Z','DQN_action',
                          'SAC_action', 'DQN_reward','SAC_reward', 'done','mask'))
 
 epsilon = 1e-6
 
+# initializing class for buffer replay
 class ReplayMemory():
     def __init__(self, capacity):
         self.capacity = capacity
@@ -38,6 +39,7 @@ class ReplayMemory():
     def __len__(self):
         return len(self.memory)
 
+# initializing agent for RL
 class Agent(object):
     def __init__(self, num_inputs, action_space, goal_size, args, n_vars, l_cnt, env):
 
@@ -45,30 +47,42 @@ class Agent(object):
         self.tau = args.tau
         self.alpha = args.alpha
 
+        # network layer sizes
+        # state size
         self.a_dims = 20
+        # goal size
         self.g_dims = 15
+        # size used for action/variable pre-processing
         self.pre_process_dims = 2
+        # fully connected layer sizes
         self.fc1_dims = 64
         self.fc2_dims = 32
+        # learning rates
         self.critic_lr = args.critic_lr
         self.actor_lr = args.actor_lr
         self.dqn_lr = args.dqn_lr
+        # size for current point in arm
         self.c_size = 1
+        # size for discrete module type chosen
         self.m_size = 1
+        # size for latent encoding of state
         self.Z_size = 32
 
         #print('len(action space) ',action_space.shape)
 
+        # initializing DQN
         self.dqn = DQN(len(env.state), env.mod_size, self.dqn_lr, self.gamma, len(env.goal), self.pre_process_dims, n_vars, l_cnt, self.c_size)
         self.dqn_target = DQN(len(env.state), env.mod_size, self.dqn_lr, self.gamma, len(env.goal), self.pre_process_dims, n_vars, l_cnt, self.c_size)
         self.dqn_optim = optim.RMSprop(self.dqn.parameters(), lr=args.dqn_lr)
 
+        # initializing critic network for SAC
         self.critic = QNetwork(n_vars, l_cnt, self.Z_size, self.a_dims, self.pre_process_dims, self.fc1_dims, self.fc2_dims)
-        self.critic_optim = Adam(self.critic.parameters(), lr=args.critic_lr)
-
         self.critic_target = QNetwork(n_vars, l_cnt, self.Z_size, self.a_dims, self.pre_process_dims, self.fc1_dims, self.fc2_dims)
+        self.critic_optim = Adam(self.critic.parameters(), lr=args.critic_lr)
+        # hard update to set critic equal to target critic
         hard_update(self.critic_target, self.critic)
 
+        # initializing actors for different module types
         self.link_policy = GaussianPolicy(n_vars, l_cnt, self.Z_size, self.a_dims, self.pre_process_dims, self.fc1_dims, self.fc2_dims, action_space)
         self.link_policy_optim = Adam(self.link_policy.parameters(), lr=args.actor_lr)
         self.bracket_policy = GaussianPolicy(n_vars, l_cnt, self.Z_size, self.a_dims, self.pre_process_dims, self.fc1_dims, self.fc2_dims, action_space)
@@ -93,7 +107,6 @@ class Agent(object):
         else:
             action, log_prob, mean = T.FloatTensor([[0],[0],[0]])
         return action, log_prob, mean
-
 
     def update_full_sample(self, max_dqn_vals, Z, batch, env):
         max_dqn_vals = max_dqn_vals.flatten()
@@ -151,7 +164,11 @@ class Agent(object):
         return full_actions, full_log_probs, full_means
 
     def sample(self, policy, Z, batch, env):
-        mean, log_std = policy.forward(Z, batch, env)
+        if env.evaluate == True:
+            with T.no_grad():
+                mean, log_std = policy.forward(Z, batch, env)
+        else:
+            mean, log_std = policy.forward(Z, batch, env)
         std = log_std.exp()
         normal = Normal(mean, std) # what should mean and std be here?
         x_t = normal.rsample() # for reparameterization trick
