@@ -4,30 +4,38 @@ import numpy as np
 import math
 import time
 
+# pybullet simulation for inverse kinematics
 def sim(goal, pos_epsilon, orient_epsilon):
-    physicsClient = p.connect(p.DIRECT)  # or p.DIRECT for non-graphical version, p.DIRECT is faster
-    p.setAdditionalSearchPath(pybullet_data.getDataPath())
+    physicsClient = p.connect(p.DIRECT)  # P.GUI for image or p.DIRECT for non-graphical version, p.DIRECT is faster
+    p.setAdditionalSearchPath(pybullet_data.getDataPath()) # need to keep in
+    #p.setRealTimeSimulation(1) # don't need if doing p.DIRECT for server, but do need for p.GUI
+    # loading in plane
     planeId = p.loadURDF("plane.urdf")
-    cubeStartPos = [0,0,0]
-    cubeStartOrientation = p.getQuaternionFromEuler([0,0,0])
-    robotId = p.loadURDF("dqn_sac.urdf",cubeStartPos, cubeStartOrientation)
+    # loading in arrangement for episode
+    robotStartPos = [0,0,0]
+    robotStartOrientation = p.getQuaternionFromEuler([0,0,0])
+    robotId = p.loadURDF("dqn_sac.urdf", robotStartPos, robotStartOrientation)
 
-    # inverse kinematics
+    # get number of joints in robot
     finalJoint = p.getNumJoints(robotId)
+    # obtaining first iteration of IK to act as initial condition
     angles = p.calculateInverseKinematics(robotId, finalJoint - 1, goal[0:3],goal[3:])
+    # move arm into first iteration angles
     for i in range(len(angles)):
         p.resetJointState(robotId, 3*i + 2, angles[i])
 
-    #p.setRealTimeSimulation(1) # don't need if doing p.DIRECT for server, but do need for p.GUI
     if len(goal) > 3:
         orientation = True
     else:
         orientation = False
-    # forward kinematics
+
+    # initializing position and orientation distances and end-effector positions and orientations
     pos_dist = 0
     orient_dist = 0
     endEffPos = 0
     endEffOrient = 0
+
+    # running IK for 10 iterations
     for i in range(10):
         angles = p.calculateInverseKinematics(robotId, finalJoint - 1, goal[0:3],goal[3:])
         for j in range(len(angles)):
@@ -35,6 +43,7 @@ def sim(goal, pos_epsilon, orient_epsilon):
         #p.resetJointStatesMultiDof(robotId, np.arange(2, finalJoint, 3), angles)
         endEffPos = p.getLinkState(robotId, finalJoint - 1)[0]
         endEffOrient = p.getLinkState(robotId, finalJoint - 1)[1]
+        # calculating euclidean distance between end effector and goal
         pos_dist = np.linalg.norm(np.array([a_i - b_i for a_i, b_i in zip(endEffPos, goal[0:3])]))
         #print('end eff orient: ', endEffOrient)
         #print('goal: ', goal)
@@ -43,6 +52,7 @@ def sim(goal, pos_epsilon, orient_epsilon):
         if orientation:
             endEffOrientMatrix = np.reshape(p.getMatrixFromQuaternion(endEffOrient), (3,3))
             goalMatrix = np.reshape(p.getMatrixFromQuaternion(goal[3:]), (3,3))
+            # calculating 2-norm between orientations
             orient_dist = np.linalg.norm(np.eye(3) - np.matmul(goalMatrix, np.transpose(endEffOrientMatrix)), ord=2)
         else:
             orient_dist = 0

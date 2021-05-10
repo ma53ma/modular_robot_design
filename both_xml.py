@@ -2,7 +2,7 @@ from xml.dom import minidom
 import os
 from lxml import etree
 
-# information that we need / would get from DQN arrangement
+## XACRO TO URDF PROCESSING ##
 
 # Embedded
 sections = ['base','shoulder','elbow','wrist1','wrist2','wrist3'] # make this work for infinitely long arms?
