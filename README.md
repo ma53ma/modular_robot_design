@@ -1,5 +1,5 @@
 # modular_robot_design
-# both_main.py  
+## both_main.py  
 This file runs the main training loop where the networks make actions, receive updates, and are subsequently updated using a replay buffer.  
 class env(): the environment that the agent will act in  
   def init: initialize environment  
