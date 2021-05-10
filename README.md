@@ -27,3 +27,7 @@ def binary_rew: hard reward function including positive rewards if within distan
 def binary_orient_rew: hard reward function for when orientation is included in goal, reward if within distance and orientation threshold, 0 if not  
 def tiered_binary_orient_rew: reward function including positive rewards for passing both thresholds or either threshold, 0 if not passing any 
 
+## both_agent.py
+This file includes files relevant to the agent within this RL environment  
+##### class ReplayMemory()
+
