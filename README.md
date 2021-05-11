@@ -1,3 +1,5 @@
+Link for write-up: https://docs.google.com/document/d/1PDpbjz48maZTH5s43mOXJreS7ni35jLuph0T7zHnVng/edit?usp=sharing
+
 # modular_robot_design
 ## both_main.py  
 This file runs the main training loop where the networks make actions, receive updates, and are subsequently updated using a replay buffer.  
