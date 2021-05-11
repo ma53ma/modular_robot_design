@@ -62,3 +62,14 @@ def forward: forward pass for critic
 def init: initialize the Gaussian actor network  
 def forward: forward pass for actor  
 
+## both_sim.py  
+def sim: PyBullet IK simulation  
+
+## both_xml.py  
+def input_parser:  accepts arrangement from episode and gives the different module types for the arrangement  
+def actuator: actuator-specific syntex configuring for xacro  
+def bracket: bracket-specific syntex configuring for xacro  
+def link: link-specific syntex configuring for xacro  
+def gripper: gripper-specific syntex configuring for xacro  
+def get_names:  get the names needed for proper xacro syntax  
+def make_xml:  create the actual xacro for the arrangement  
