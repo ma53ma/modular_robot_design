@@ -30,4 +30,19 @@ def tiered_binary_orient_rew: reward function including positive rewards for pas
 ## both_agent.py
 This file includes files relevant to the agent within this RL environment  
 ##### class ReplayMemory()
+def init: initialize buffer  
+def push: push a sample into the buffer  
+def sample: sample random batch from buffer  
+def len: obtain current size of buffer  
 
+##### class Agent()
+def init: initialize the agent  
+def indiv_sample: sample continuous action for a single arrangement (not batch, not necessarily using network)  
+def update_fall_sample: sample continuous action for a batch for network updates  
+def sample: sample a continuous action using actor network  
+def select_action:  select a continuous action based on if network is in training or evaluation mode  
+def dqn_optimize_model: optimize model for DQN  
+def sac_optimize_model: optimize model for SAC  
+
+##### additional functions  
+def masking: masking action choices based on previous action taken (i.e., if actuator taken previously, cannot take actuator again)  
