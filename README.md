@@ -46,3 +46,19 @@ def sac_optimize_model: optimize model for SAC
 
 ##### additional functions  
 def masking: masking action choices based on previous action taken (i.e., if actuator taken previously, cannot take actuator again)  
+
+## both_models.py  
+def weights_init_: initialize the weights for a network  
+
+##### class DQN()  
+def init: initialize the Deep-Q network  
+def forward: forward pass for DQN  
+
+##### class QNetwork  
+def init: initialize the critic network  
+def forward: forward pass for critic  
+
+##### class GaussianPolicy  
+def init: initialize the Gaussian actor network  
+def forward: forward pass for actor  
+
